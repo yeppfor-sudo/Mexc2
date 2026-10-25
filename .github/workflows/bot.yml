@@ -1,7 +1,6 @@
 name: MEXC EMA Rejection Bot
 on:
   schedule:
-    # Runs every 4h + daily - covers 4h,8h,12h,1d,3d,5d,7d latest closed candle
     - cron: '5 0,4,8,12,16,20 * * *'
   workflow_dispatch:
 jobs:
