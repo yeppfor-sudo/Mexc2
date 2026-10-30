@@ -5,10 +5,33 @@ from datetime import datetime, timedelta
 BOT_TOKEN=os.getenv("BOT_TOKEN"); CHAT_ID=os.getenv("CHAT_ID")
 MEMORY_FILE="short_memory.json"
 
-BLOCK_STOCKS = {'TLT','TLH','IEF','SHY','INDA','EWJ','EWA','EWZ','KWEB','QQQ','SPY','DIA','IWM','EWW','EWC','MCHI','INDY','STRC','OURA','SPX','SPX500','NAS100','DJI','US30','UK100','GER40','RKLB','NVDA','AAPL','TSLA','MSFT','STOCK','ETF','OIL','SILVER','GOLD','XAU','XAG','XAUT','PAXG','KAU','TRY','EUR','GBP','JPY','AUD','CAD','CHF','NZD','USDC','BUSD','FDUSD','TUSD','DAI','USDE','USDP','GUSD','PYUSD','EURI','EURC','XLU','XLP','XLE','XLF','XLB','XLI','XLY','XLK','XLV','GLD','SLV','GDX','GDXJ','COPX','LIT','URA'}
+# ========= ULTRA FILTER - ONLY CRYPTO =========
+BLOCK_STOCKS = {'TLT','TLH','IEF','SHY','INDA','EWJ','EWA','EWZ','KWEB','QQQ','SPY','DIA','IWM','EWW','EWC','MCHI','INDY','STRC','OURA','SPX','SPX500','NAS100','DJI','US30','UK100','GER40','RKLB','NVDA','AAPL','TSLA','MSFT','STOCK','ETF','OIL','SILVER','GOLD','XAU','XAG','XAUT','PAXG','KAU','TRY','EUR','GBP','JPY','AUD','CAD','CHF','NZD','USDC','BUSD','FDUSD','TUSD','DAI','USDE','USDP','GUSD','PYUSD','EURI','EURC','XLU','XLP','XLE','XLF','XLB','XLI','XLY','XLK','XLV','GLD','SLV','GDX','GDXJ','COPX','LIT','URA','SQQQ','TQQQ','SOXS','SOXL','SPXS','SPXL','SKDD','XSOXS','XSOX','LABU','LABD','TECL','TECS','UPRO','SPXU','TZA','TNA','FAS','FAZ','SDOW','UDOW','SOXL','SOXS','SPXS','SPXL'}
+
 BLOCK_MEGA = {'BTC','ETH','SOL','BNB','TRX','XRP','ADA','DOGE','AVAX','DOT','LINK','LTC','BCH','XLM','ETC','HBAR','APT','NEAR','UNI','FIL','ARB','OP','ATOM','MATIC','POL','TON','SHIB','PEPE','CRO','LEO','OKB','BGB','SUI','LDO','RNDR','TAO','FET','WIF','ENA','JUP','SEI','TIA','ONDO','W','PYTH','STRK','JTO','ENS'}
+
 BLOCK_COMMODITY = {'LEAD','COPPER','NICKEL','ZINC','TIN','ALUM','ALUMINIUM','ALUMINUM','CORN','SOY','WHEAT','COTTON','SUGAR','COFFEE','COCOA','GAS'}
+
 BLOCK_ALL = BLOCK_STOCKS | BLOCK_MEGA | BLOCK_COMMODITY
+
+def is_valid_crypto(sym):
+    if not sym.endswith('USDT:USDT'): 
+        return False
+    base = sym.split('/')[0].upper()
+    if any(x in base for x in ['STOCK','ETF','SOX','QQQ','SPX','DJI','SKDD','XSOX','TLT','SPY','DIA','TLT','GDX']):
+        return False
+    if any(x in base for x in ['XAU','PAXG','GOLD','XAG','LEAD','COPPER','NICKEL','ZINC','TIN','GLD','SLV','ALUM']):
+        return False
+    if base in BLOCK_ALL: 
+        return False
+    if len(base) < 2 or len(base) > 6: 
+        return False
+    if any(c.isdigit() for c in base): 
+        return False
+    if not base.isalpha(): 
+        return False
+    return True
+# ========= END FILTER =========
 
 def send_text(msg):
     try:
@@ -25,29 +48,16 @@ def send_photo(fig, cap):
 
 def ema(s,n): return s.ewm(span=n, adjust=False).mean()
 
-def is_valid_crypto(sym):
-    base = sym.split('/')[0].split(':')[0].upper()
-    if 'STOCK' in base: return False
-    if base in BLOCK_ALL: return False
-    if any(x in base for x in ['XAU','PAXG','GOLD','XAG','LEAD','COPPER','NICKEL','ZINC','TIN','GLD','SLV','ALUM']): return False
-    if len(base) < 2 or len(base) > 6: return False
-    if any(c.isdigit() for c in base): return False
-    if not base.isalpha(): return False
-    if 'USDT' not in sym: return False
-    return True
-
 def check_gainer_pump(df_1d):
     if len(df_1d) < 30: return False, 0, ""
     df_1d['pct'] = df_1d['c'].pct_change()*100
     today = df_1d['pct'].iloc[-1]
     yest = df_1d['pct'].iloc[-2]
-    # RELAXED for your screenshot case - 4% today OR 6% yesterday
     is_gainer = (today >= 4) or (yest >= 6) or (today+yest >= 10)
     if not is_gainer: return False, 0, ""
     low_20 = df_1d['l'].iloc[-20:].min()
     high_3 = df_1d['h'].iloc[-3:].max()
     pump = (high_3/low_20-1)*100 if low_20>0 else 0
-    # RELAXED 35% not 45% so you get results today
     if pump < 35: return False, 0, ""
     return True, pump, f"Gainer T:{today:.1f}% Y:{yest:.1f}% Pump {pump:.0f}%"
 
@@ -58,7 +68,7 @@ def check_tight_top(df_1h):
     near_top = last_6['c'].mean() >= high_20*0.88
     if not near_top: return False, 0, ""
     last_6['rng'] = (last_6['h']-last_6['l'])/last_6['c']
-    tight = (last_6['rng'] < 0.022).sum()  # relaxed 2.2% not 1.5%
+    tight = (last_6['rng'] < 0.022).sum()
     avg = last_6['rng'].mean()
     if tight >= 2:
         return True, tight, f"Tight Top {tight}/6H {avg*100:.2f}%"
@@ -117,7 +127,12 @@ def load_mem():
         try:
             data=json.loads(open(MEMORY_FILE).read())
             cutoff=datetime.utcnow()-timedelta(days=4)
-            cleaned={k:v for k,v in data.items() if datetime.fromisoformat(v['first_seen'])>cutoff and v['base'] not in BLOCK_ALL}
+            cleaned={}
+            for k,v in data.items():
+                b=v.get('base',k).upper()
+                if datetime.fromisoformat(v['first_seen'])>cutoff and b not in BLOCK_ALL:
+                    if 'STOCK' not in b and 'SOX' not in b and 'SKDD' not in b and 'XSOX' not in b:
+                        cleaned[b]=v
             return cleaned
         except: pass
     return {}
@@ -126,9 +141,8 @@ def save_mem(m):
     try: open(MEMORY_FILE,'w').write(json.dumps(m,indent=2))
     except: pass
 
-send_text(f"🔻 <b>SHORT V2 FIXED {datetime.utcnow().strftime('%H:%M UTC')}</b>")
+send_text(f"🔻 <b>SHORT V3 ULTRA FILTER {datetime.utcnow().strftime('%H:%M UTC')}</b>\nOnly Crypto USDT PERP")
 
-# FIXED EXS - BYBIT removed due to 403, use only working
 EXS = [
     ('BINANCE', ccxt.binanceusdm, {'enableRateLimit': True}),
     ('MEXC', ccxt.mexc, {'enableRateLimit': True, 'options': {'defaultType': 'swap'}}),
@@ -138,7 +152,7 @@ EXS = [
 ]
 
 memory=load_mem()
-send_text(f"🧠 Short Memory: {len(memory)} watching")
+send_text(f"🧠 Short Memory: {len(memory)} coins (cleaned)")
 seen=set(memory.keys())
 new=0; breaks=0; scanned=0; gainer_found=0
 
@@ -146,10 +160,9 @@ for exn, cls, opts in EXS:
     try:
         ex=cls(opts); ex.load_markets()
         syms=[s for s in ex.markets if is_valid_crypto(s)]
-        send_text(f"📊 {exn}: {len(syms)} USDT PERP")
+        send_text(f"📊 {exn}: {len(syms)} USDT PERP - ONLY CRYPTO")
         for sym in syms:
             base=sym.split('/')[0].split(':')[0].upper()
-            # CHECK MEMORY BREAKDOWN FIRST
             if base in memory:
                 try:
                     df_15m=pd.DataFrame(ex.fetch_ohlcv(sym,'15m',limit=50), columns=['t','o','h','l','c','v'])
@@ -187,4 +200,4 @@ for exn, cls, opts in EXS:
         continue
 
 save_mem(memory)
-send_text(f"✅ <b>SHORT V2 DONE</b> Gainers found {gainer_found} New Saved {new} Breakouts 15M {breaks}\n🧠 Total {len(memory)} in memory\nScanned tight {scanned}")
+send_text(f"✅ <b>SHORT V3 DONE</b> Gainers {gainer_found} New Saved {new} Breakouts 15M {breaks}\n🧠 Total {len(memory)} only crypto\nNo SKDD XSOXS LEAD GLD BTC ETH")
