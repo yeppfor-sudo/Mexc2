@@ -1,0 +1,17 @@
+name: Short Top Bot
+on:
+  schedule:
+    - cron: '0 */4 * * *'
+  workflow_dispatch:
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
+        with: {python-version: '3.11'}
+      - run: pip install ccxt pandas requests matplotlib
+      - run: python short_bot.py
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
