@@ -1,4 +1,4 @@
-name: Short Top Bot
+name: Short Top Bot V2
 on:
   schedule:
     - cron: '0 */4 * * *'
@@ -15,3 +15,9 @@ jobs:
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
+      - run: |
+          git config user.name "bot"
+          git config user.email "bot@bot.com"
+          git add short_memory.json || true
+          git commit -m "short mem" || true
+          git push || true
