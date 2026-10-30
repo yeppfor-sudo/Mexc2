@@ -1,4 +1,4 @@
-name: Short Top Bot V2
+name: Short Top Bot V3
 on:
   schedule:
     - cron: '0 */4 * * *'
@@ -19,5 +19,5 @@ jobs:
           git config user.name "bot"
           git config user.email "bot@bot.com"
           git add short_memory.json || true
-          git commit -m "short mem" || true
+          git commit -m "short mem v3" || true
           git push || true
