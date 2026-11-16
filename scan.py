@@ -1,5 +1,6 @@
 import os, json, time, io
 from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 import numpy as np
 import pandas as pd
@@ -11,6 +12,8 @@ BASE = "https://contract.mexc.com/api/v1/contract"
 TFS = ["4h", "8h", "1d", "2d", "3d"]
 NATIVE = {"4h": "Hour4", "8h": "Hour8", "1d": "Day1"}
 RESAMPLE = {"2d": ("1d", "2D"), "3d": ("1d", "3D")}
+SRC_SECONDS = {"4h": 4 * 3600, "8h": 8 * 3600, "1d": 86400}
+BARS = 330
 
 PUMP_MIN = 0.80
 PULLBACK_MIN = 0.15
@@ -21,7 +24,9 @@ EMA_SPREAD_MAX = 0.07
 BO_MIN_GAIN = 0.04
 BO_MAX_EXT = 1.50
 LOOKBACK = 150
-SLEEP = 0.12
+SLEEP = 0.03
+WORKERS = 6
+MAX_SCAN_SECONDS = 18 * 60
 MAX_ALERTS = 15
 COOLDOWN_H = {"BASE": 72, "BREAKOUT": 24}
 STATE_FILE = "sent.json"
@@ -34,13 +39,15 @@ EXCLUDE = {"XAU", "XAG", "GOLD", "SILVER", "OIL", "BRENT", "WTI", "TSLA",
            "CRCL", "HOOD", "CRWV", "SPY", "QQQ", "SPX", "NDX", "PAXG"}
 
 S = requests.Session()
+S.mount("https://", requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=20))
 RAW = {}
+DEADLINE = time.time() + MAX_SCAN_SECONDS
 
 
 def get(url, params=None, tries=4):
     for i in range(tries):
         try:
-            r = S.get(url, params=params, timeout=20)
+            r = S.get(url, params=params, timeout=15)
             if r.status_code == 200:
                 return r.json()
             if r.status_code == 429:
@@ -50,21 +57,32 @@ def get(url, params=None, tries=4):
     return None
 
 
-def raw_klines(sym, src):
-    key = (sym, src)
-    if key in RAW:
-        return RAW[key]
-    j = get(f"{BASE}/kline/{sym}", {"interval": NATIVE[src]})
-    time.sleep(SLEEP)
+def parse(j):
     if not j or not j.get("success") or not j.get("data"):
         return None
     d = j["data"]
-    df = pd.DataFrame({
+    if not d.get("time"):
+        return None
+    return pd.DataFrame({
         "time": pd.to_datetime(d["time"], unit="s"),
         "open": d["open"], "high": d["high"],
         "low": d["low"], "close": d["close"], "vol": d["vol"],
     }).set_index("time").astype(float)
-    RAW[key] = df
+
+
+def raw_klines(sym, src):
+    key = (sym, src)
+    if key in RAW:
+        return RAW[key]
+    end = int(time.time())
+    start = end - BARS * SRC_SECONDS[src]
+    df = parse(get(f"{BASE}/kline/{sym}",
+                   {"interval": NATIVE[src], "start": start, "end": end}))
+    if df is None:
+        df = parse(get(f"{BASE}/kline/{sym}", {"interval": NATIVE[src]}))
+    time.sleep(SLEEP)
+    if df is not None:
+        RAW[key] = df
     return df
 
 
@@ -142,6 +160,25 @@ def detect(df, mode):
     return None
 
 
+def scan_symbol(sym):
+    out = []
+    if time.time() > DEADLINE:
+        return out
+    for tf in TFS:
+        try:
+            df = klines(sym, tf)
+            if df is None or len(df) < 70:
+                continue
+            for mode in ("BREAKOUT", "BASE"):
+                r = detect(df, mode)
+                if r:
+                    out.append((sym, tf, r))
+                    break
+        except Exception as e:
+            print("err", sym, tf, e)
+    return out
+
+
 def make_chart(sym, tf, r):
     df = add_ema(klines(sym, tf)).tail(90)
     mc = mpf.make_marketcolors(up="#0ba66b", down="#f8445b",
@@ -212,22 +249,22 @@ def main():
         if x["symbol"].split("_")[0].upper() in EXCLUDE:
             continue
         syms.append(x["symbol"])
-    print("Pairs:", len(syms))
+    print("Pairs:", len(syms), flush=True)
 
     hits = []
-    for sym in syms:
-        for tf in TFS:
+    done = 0
+    with ThreadPoolExecutor(max_workers=WORKERS) as ex:
+        futs = [ex.submit(scan_symbol, s) for s in syms]
+        for f in as_completed(futs):
             try:
-                df = klines(sym, tf)
-                if df is None or len(df) < 70:
-                    continue
-                for mode in ("BREAKOUT", "BASE"):
-                    r = detect(df, mode)
-                    if r:
-                        hits.append((sym, tf, r))
-                        break
+                hits.extend(f.result())
             except Exception as e:
-                print("err", sym, tf, e)
+                print("worker err", e)
+            done += 1
+            if done % 50 == 0:
+                print(f"{done}/{len(syms)} scanned | hits {len(hits)}", flush=True)
+    if time.time() > DEADLINE:
+        print("Scan stopped at time limit, using partial results")
 
     hits.sort(key=lambda h: (h[2]["mode"] != "BREAKOUT", -h[2]["pump"]))
     sent = 0
@@ -251,7 +288,7 @@ def main():
     state = {k: v for k, v in state.items()
              if (now - datetime.fromisoformat(v["sent"])).total_seconds() / 3600 < cutoff}
     save_state(state)
-    print(f"Hits: {len(hits)} | Alerts sent: {sent}")
+    print(f"Hits: {len(hits)} | Alerts sent: {sent}", flush=True)
 
 
 if __name__ == "__main__":
